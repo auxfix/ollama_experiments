@@ -3,7 +3,6 @@ package main
 import (
     "net/http"
     "context"
-    "fmt"
 
     "github.com/gin-gonic/gin"
     lama "github.com/ollama/ollama/api"
@@ -12,6 +11,26 @@ import (
 func main() {
     router := gin.Default()
     router.SetTrustedProxies([]string{}) // Silences the "trusted all proxies" warning
+
+    // CORS and Cache Middleware
+    router.Use(func(c *gin.Context) {
+        c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+        c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+        c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+        // Disable caching completely
+        c.Writer.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
+        c.Writer.Header().Set("Pragma", "no-cache")
+        c.Writer.Header().Set("Expires", "0")
+
+        if c.Request.Method == "OPTIONS" {
+            c.AbortWithStatus(204)
+            return
+        }
+
+        c.Next()
+    })
+
     router.POST("/ask_mii", askMii)
 
     router.Run("localhost:6767")
@@ -28,7 +47,7 @@ func askMii(c *gin.Context) {
     if err := c.ShouldBindJSON(&request); err != nil {
         c.JSON(http.StatusBadRequest, gin.H{
             "status": "error",
-            "message": "Invalid request body. Must include a JSON field 'ask_msg' containing the text message.",
+            "message": "Invalid request body. Must include a JSON field 'ask_msk' containing the text message.",
         })
         return
     }
@@ -47,32 +66,12 @@ func askMii(c *gin.Context) {
       Prompt: ask,
     }
   
-    // Set headers for streaming
-    c.Header("Content-Type", "text/event-stream")
-    c.Header("Cache-Control", "no-cache")
-    c.Header("Connection", "keep-alive")
-
+    var fullResponse string
     err := client.Generate(ctx, req, func(resp lama.GenerateResponse) error {
-      // Write the chunk directly to the response writer
-      fmt.Fprint(c.Writer, resp.Response)
-      
-      // Flush the writer to ensure the client receives the chunk immediately
-      if c.Writer != nil {
-        if flusher, ok := c.Writer.(http.Flusher); ok {
-            flusher.Flush()
-        }
-      }
-
-      if resp.Done {
-        fmt.Fprint(c.Writer, "\n")
-        if c.Writer != nil {
-            if flusher, ok := c.Writer.(http.Flusher); ok {
-                flusher.Flush()
-            }
-        }
-      }
+      fullResponse += resp.Response
       return nil
     })
+
     if err != nil {
       c.JSON(http.StatusInternalServerError, gin.H{
         "status":  "error",
@@ -80,4 +79,9 @@ func askMii(c *gin.Context) {
       })
       return
     }
+
+    c.JSON(http.StatusOK, gin.H{
+      "status":  "success",
+      "message": fullResponse,
+    })
 }
